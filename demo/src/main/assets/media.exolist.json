@@ -160,6 +160,30 @@
         "uri": "https://storage.googleapis.com/wvmedia/cenc/h264/tears/tears_uhd.mpd",
         "drm_scheme": "widevine",
         "drm_license_url": "https://proxy.uat.widevine.com/proxy?provider=widevine_test"
+      },
+      {
+        "name": "WV: CASTLABS EXAMPLE (MP4,H264)",
+        "uri": "YOUR MPD URL",
+        "drm_scheme": "castlabs_widevine",
+        "drm_license_url": "YOUR LICENSE URL",
+        "drm_key_request_properties": {
+          "merchant": "MERCHANT ID",
+          "assetId": "ASSET ID",
+          "userId": "USER ID",
+          "sessionId": "SESSION ID"
+        }
+      },
+      {
+        "name": "WV: OFFLINE CASTLABS EXAMPLE (MP4,H264)",
+        "uri": "offline:USER ID OF THE DOWNLOADED VIDEO",
+        "drm_scheme": "castlabs_widevine",
+        "drm_license_url": "YOUR LICENSE URL",
+        "drm_key_request_properties": {
+          "merchant": "MERCHANT ID",
+          "assetId": "ASSET ID",
+          "userId": "USER ID",
+          "sessionId": "SESSION ID"
+        }
       }
     ]
   },
