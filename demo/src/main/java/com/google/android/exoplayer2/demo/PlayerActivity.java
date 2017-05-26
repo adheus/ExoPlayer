@@ -23,6 +23,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.support.annotation.NonNull;
 import android.text.TextUtils;
+import android.util.Log;
+import android.util.Pair;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -39,11 +41,14 @@ import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.drm.DefaultDrmSessionManager;
+import com.google.android.exoplayer2.drm.DrmSession;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
 import com.google.android.exoplayer2.drm.FrameworkMediaCrypto;
 import com.google.android.exoplayer2.drm.FrameworkMediaDrm;
 import com.google.android.exoplayer2.drm.HttpMediaDrmCallback;
+import com.google.android.exoplayer2.drm.OfflineLicenseHelper;
 import com.google.android.exoplayer2.drm.UnsupportedDrmException;
+import com.google.android.exoplayer2.drm.WidevineUtil;
 import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
 import com.google.android.exoplayer2.mediacodec.MediaCodecRenderer.DecoderInitializationException;
 import com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryException;
@@ -69,6 +74,8 @@ import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
 import com.google.android.exoplayer2.upstream.HttpDataSource;
 import com.google.android.exoplayer2.util.Util;
+import com.kaltura.dtg.ContentManager;
+
 import java.net.CookieHandler;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
@@ -95,6 +102,8 @@ public class PlayerActivity extends Activity implements OnClickListener, ExoPlay
 
   private static final DefaultBandwidthMeter BANDWIDTH_METER = new DefaultBandwidthMeter();
   private static final CookieManager DEFAULT_COOKIE_MANAGER;
+  public static final String FORCE_CASTLABS_WIDEVINE = "force_castlabs_widevine";
+
   static {
     DEFAULT_COOKIE_MANAGER = new CookieManager();
     DEFAULT_COOKIE_MANAGER.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER);
@@ -286,7 +295,12 @@ public class PlayerActivity extends Activity implements OnClickListener, ExoPlay
       Uri[] uris;
       String[] extensions;
       if (ACTION_VIEW.equals(action)) {
-        uris = new Uri[] {intent.getData()};
+        Uri uri = intent.getData();
+        if (uri.toString().startsWith("offline")) {
+          String downloadId = uri.toString().split(":")[1];
+          uri = Uri.fromFile(ContentManager.getInstance(this).getLocalFile(downloadId));
+        }
+        uris = new Uri[] {uri};
         extensions = new String[] {intent.getStringExtra(EXTENSION_EXTRA)};
       } else if (ACTION_VIEW_LIST.equals(action)) {
         String[] uriStrings = intent.getStringArrayExtra(URI_LIST_EXTRA);
@@ -348,16 +362,49 @@ public class PlayerActivity extends Activity implements OnClickListener, ExoPlay
     if (Util.SDK_INT < 18) {
       return null;
     }
-    HttpMediaDrmCallback drmCallback = new HttpMediaDrmCallback(licenseUrl,
-        buildHttpDataSourceFactory(false));
-    if (keyRequestPropertiesArray != null) {
-      for (int i = 0; i < keyRequestPropertiesArray.length - 1; i += 2) {
-        drmCallback.setKeyRequestProperty(keyRequestPropertiesArray[i],
-            keyRequestPropertiesArray[i + 1]);
+    if (getIntent().getBooleanExtra(FORCE_CASTLABS_WIDEVINE, false)) {
+        for (String key : keyRequestPropertiesArray) {
+            Log.d("DEBUG DO DEDEU", key);
+        }
+      CastlabsWidevineDrmCallback castlabsWidevineDrmCallback = new CastlabsWidevineDrmCallback(licenseUrl,
+              keyRequestPropertiesArray[1],
+              keyRequestPropertiesArray[3],
+              keyRequestPropertiesArray[5],
+              keyRequestPropertiesArray[7],
+              buildHttpDataSourceFactory(false));
+
+      DefaultDrmSessionManager<FrameworkMediaCrypto> defaultDrmSessionManager = new DefaultDrmSessionManager<>(uuid, FrameworkMediaDrm.newInstance(uuid), castlabsWidevineDrmCallback, null, mainHandler, eventLogger);
+      Uri uri = getIntent().getData();
+      if (uri.toString().startsWith("offline")) {
+        String offlineVideoId = uri.toString().split(":")[1];
+
+        byte[] licenseKeySet = DRMLicenseFecther.Manager.INSTANCE.getLicenseForOfflineVideoId(this, offlineVideoId);
+        assert licenseKeySet != null;
+        Log.d("DEBUG DO DEDEU", "Found offline licenseKeySet for video:" + licenseKeySet.toString());
+        try {
+          Pair<Long, Long> duration = new  OfflineLicenseHelper<>(FrameworkMediaDrm.newInstance(C.WIDEVINE_UUID), castlabsWidevineDrmCallback, null).getLicenseDurationRemainingSec(licenseKeySet);
+          Log.d("DEBUG DO DEDEU", "Remaining time:  " + duration.first.toString() + " s / Playback duration: " + duration.second.toString() + " s");
+          Log.d("DEBUG DO DEDEU", "Found offline licenseKeySet for video:" + licenseKeySet.toString());
+        } catch (DrmSession.DrmSessionException e) {
+          e.printStackTrace();
+        }
+
+        defaultDrmSessionManager.setMode(DefaultDrmSessionManager.MODE_PLAYBACK, licenseKeySet);
       }
+
+      return defaultDrmSessionManager;
+    } else {
+      HttpMediaDrmCallback drmCallback = new HttpMediaDrmCallback(licenseUrl,
+              buildHttpDataSourceFactory(false));
+      if (keyRequestPropertiesArray != null) {
+        for (int i = 0; i < keyRequestPropertiesArray.length - 1; i += 2) {
+          drmCallback.setKeyRequestProperty(keyRequestPropertiesArray[i],
+                  keyRequestPropertiesArray[i + 1]);
+        }
+      }
+      return new DefaultDrmSessionManager<>(uuid,
+              FrameworkMediaDrm.newInstance(uuid), drmCallback, null, mainHandler, eventLogger);
     }
-    return new DefaultDrmSessionManager<>(uuid,
-        FrameworkMediaDrm.newInstance(uuid), drmCallback, null, mainHandler, eventLogger);
   }
 
   private void releasePlayer() {

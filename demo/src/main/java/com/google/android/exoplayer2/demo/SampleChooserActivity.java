@@ -15,13 +15,17 @@
  */
 package com.google.android.exoplayer2.demo;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Bundle;
+import android.support.v4.app.ActivityCompat;
 import android.util.JsonReader;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -37,7 +41,9 @@ import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DataSourceInputStream;
 import com.google.android.exoplayer2.upstream.DataSpec;
+import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter;
 import com.google.android.exoplayer2.upstream.DefaultDataSource;
+import com.google.android.exoplayer2.upstream.HttpDataSource;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Util;
 import java.io.IOException;
@@ -90,6 +96,18 @@ public class SampleChooserActivity extends Activity {
       Toast.makeText(getApplicationContext(), R.string.sample_list_load_error, Toast.LENGTH_LONG)
           .show();
     }
+    for (SampleGroup group : groups) {
+      for (Sample sample : group.samples) {
+        if (sample instanceof UriSample) {
+            if (((UriSample) sample).forceCastlabsWidevine) {
+                if (sample.drmKeyRequestProperties[5].equals("2591885")) {
+                  executeWidevineDownload((UriSample) sample);
+                  break;
+                }
+            }
+        }
+      }
+    }
     ExpandableListView sampleList = (ExpandableListView) findViewById(R.id.sample_list);
     sampleList.setAdapter(new SampleAdapter(this, groups));
     sampleList.setOnChildClickListener(new OnChildClickListener() {
@@ -100,6 +118,68 @@ public class SampleChooserActivity extends Activity {
         return true;
       }
     });
+  }
+
+  @Override
+  protected void onResume() {
+    super.onResume();
+  }
+
+  public  boolean isStoragePermissionGranted() {
+    if (Build.VERSION.SDK_INT >= 23) {
+      if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+              == PackageManager.PERMISSION_GRANTED) {
+        Log.v(TAG,"Permission is granted");
+        return true;
+      } else {
+
+        Log.v(TAG,"Permission is revoked");
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
+        return false;
+      }
+    }
+    else { //permission is automatically granted on sdk<23 upon installation
+      Log.v(TAG,"Permission is granted");
+      return true;
+    }
+  }
+
+  private void executeWidevineDownload(UriSample sample) {
+    if (isStoragePermissionGranted()) {
+      String manifestURI = sample.uri;
+
+      DRMLicenseFecther drmLicenseFecther = new DRMLicenseFecther(getApplicationContext(), manifestURI,
+              sample.drmLicenseUrl,
+              sample.drmKeyRequestProperties[1],
+              sample.drmKeyRequestProperties[3],
+              sample.drmKeyRequestProperties[5],
+              sample.drmKeyRequestProperties[7],
+              buildHttpDataSourceFactory(false),
+              null, null);
+      drmLicenseFecther.download();
+    }
+  }
+
+  @Override
+  public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    if(grantResults[0]== PackageManager.PERMISSION_GRANTED){
+      Log.v(TAG,"Permission: "+permissions[0]+ "was "+grantResults[0]);
+    }
+  }
+
+  private static final DefaultBandwidthMeter BANDWIDTH_METER = new DefaultBandwidthMeter();
+
+  /**
+   * Returns a new HttpDataSource factory.
+   *
+   * @param useBandwidthMeter Whether to set {@link #BANDWIDTH_METER} as a listener to the new
+   *     DataSource factory.
+   * @return A new HttpDataSource factory.
+   */
+  private HttpDataSource.Factory buildHttpDataSourceFactory(boolean useBandwidthMeter) {
+    return ((DemoApplication) getApplication())
+            .buildHttpDataSourceFactory(useBandwidthMeter ? BANDWIDTH_METER : null);
   }
 
   private void onSampleSelected(Sample sample) {
@@ -183,6 +263,7 @@ public class SampleChooserActivity extends Activity {
       String drmLicenseUrl = null;
       String[] drmKeyRequestProperties = null;
       boolean preferExtensionDecoders = false;
+      boolean forceCastlabsWidevine = false;
       ArrayList<UriSample> playlistSamples = null;
 
       reader.beginObject();
@@ -199,8 +280,10 @@ public class SampleChooserActivity extends Activity {
             extension = reader.nextString();
             break;
           case "drm_scheme":
+            String drm_scheme = reader.nextString();
             Assertions.checkState(!insidePlaylist, "Invalid attribute on nested item: drm_scheme");
-            drmUuid = getDrmUuid(reader.nextString());
+            drmUuid = getDrmUuid(drm_scheme);
+            forceCastlabsWidevine = drm_scheme.equals("castlabs_widevine");
             break;
           case "drm_license_url":
             Assertions.checkState(!insidePlaylist,
@@ -246,7 +329,7 @@ public class SampleChooserActivity extends Activity {
             preferExtensionDecoders, playlistSamplesArray);
       } else {
         return new UriSample(sampleName, drmUuid, drmLicenseUrl, drmKeyRequestProperties,
-            preferExtensionDecoders, uri, extension);
+            preferExtensionDecoders, uri, extension, forceCastlabsWidevine);
       }
     }
 
@@ -264,6 +347,8 @@ public class SampleChooserActivity extends Activity {
     private UUID getDrmUuid(String typeString) throws ParserException {
       switch (Util.toLowerInvariant(typeString)) {
         case "widevine":
+          return C.WIDEVINE_UUID;
+        case "castlabs_widevine":
           return C.WIDEVINE_UUID;
         case "playready":
           return C.PLAYREADY_UUID;
@@ -402,19 +487,21 @@ public class SampleChooserActivity extends Activity {
 
     public final String uri;
     public final String extension;
-
+    public final boolean forceCastlabsWidevine;
     public UriSample(String name, UUID drmSchemeUuid, String drmLicenseUrl,
         String[] drmKeyRequestProperties, boolean preferExtensionDecoders, String uri,
-        String extension) {
+        String extension, boolean forceCastlabsWidevine) {
       super(name, drmSchemeUuid, drmLicenseUrl, drmKeyRequestProperties, preferExtensionDecoders);
       this.uri = uri;
       this.extension = extension;
+      this.forceCastlabsWidevine = forceCastlabsWidevine;
     }
 
     @Override
     public Intent buildIntent(Context context) {
       return super.buildIntent(context)
           .setData(Uri.parse(uri))
+          .putExtra(PlayerActivity.FORCE_CASTLABS_WIDEVINE, forceCastlabsWidevine)
           .putExtra(PlayerActivity.EXTENSION_EXTRA, extension)
           .setAction(PlayerActivity.ACTION_VIEW);
     }
